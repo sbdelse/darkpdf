@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>PDF颜色调整器</title>
+    <style>
+        :root {
+            font-size: 16px;
+        }
+        @media (max-width: 600px) {
+            :root {
+                font-size: 14px;
+            }
+        }
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 0;
+            color: #333;
+        }
+        .container {
+            max-width: 700px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background-color: #fff;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 2rem;
+            color: #007BFF;
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+        }
+        .color-picker {
+            margin-bottom: 1.5rem;
+        }
+        .color-picker label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: bold;
+        }
+        .color-picker-content {
+            display: flex;
+            align-items: center;
+        }
+        .color-display {
+            width: 50px;
+            height: 50px;
+            border: 1px solid #ccc;
+            display: inline-block;
+            cursor: pointer;
+            margin-right: 1rem;
+            border-radius: 4px;
+        }
+        .color-inputs {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+        .color-inputs div {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .color-inputs div label {
+            width: 50px;
+            font-weight: normal;
+        }
+        .color-inputs div input[type="text"] {
+            flex: 1;
+            padding: 0.5rem;
+            font-size: 1rem;
+            border: 1px solid #ccc;
+            border-radius: 0.25rem;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007BFF;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            border-radius: 0.25rem;
+            padding: 0.75rem;
+            font-size: 1rem;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 1rem;
+        }
+        canvas {
+            margin: 0 auto;
+            display: block;
+        }
+        @media (max-width: 600px) {
+            .color-picker-content {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .color-display {
+                margin-bottom: 1rem;
+            }
+            .color-inputs div label {
+                width: 40px;
+            }
+        }
+    </style>
+    <script>
+        function hexToRgb(hex) {
+            var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : null;
+        }
+
+        function rgbToHex(r, g, b) {
+            return "#" + [r, g, b].map(function(x) {
+                var hex = parseInt(x).toString(16);
+                return hex.length == 1 ? "0" + hex : hex;
+            }).join("");
+        }
+
+        function rgbToHsl(r, g, b){
+            r /= 255; g /= 255; b /= 255;
+            var max = Math.max(r, g, b), min = Math.min(r, g, b);
+            var h, s, l = (max + min) / 2;
+            if(max == min){
+                h = s = 0;
+            } else {
+                var d = max - min;
+                s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                switch(max){
+                    case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                    case g: h = (b - r) / d + 2; break;
+                    case b: h = (r - g) / d + 4; break;
+                }
+                h /= 6;
+            }
+            return {
+                h: Math.round(h * 360),
+                s: Math.round(s * 100) + "%",
+                l: Math.round(l * 100) + "%"
+            };
+        }
+
+        function hslToRgb(h, s, l){
+            var r, g, b;
+            h /= 360; s = parseFloat(s) / 100; l = parseFloat(l) / 100;
+            if(s == 0){
+                r = g = b = l;
+            } else {
+                var hue2rgb = function(p, q, t){
+                    if(t < 0) t += 1;
+                    if(t > 1) t -= 1;
+                    if(t < 1/6) return p + (q - p) * 6 * t;
+                    if(t < 1/2) return q;
+                    if(t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                    return p;
+                };
+                var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                var p = 2 * l - q;
+                r = hue2rgb(p, q, h + 1/3);
+                g = hue2rgb(p, q, h);
+                b = hue2rgb(p, q, h - 1/3);
+            }
+            return {
+                r: Math.round(r * 255),
+                g: Math.round(g * 255),
+                b: Math.round(b * 255)
+            };
+        }
+
+        function toGrayscale(rgb) {
+            var gray = Math.round((rgb.r + rgb.g + rgb.b) / 3);
+            return {r: gray, g: gray, b: gray};
+        }
+
+        function setupColorPicker(prefix) {
+            var hexInput = document.getElementById(prefix + '_color_hex');
+            var rgbInput = document.getElementById(prefix + '_color_rgb');
+            var hslInput = document.getElementById(prefix + '_color_hsl');
+            var colorDisplay = document.getElementById(prefix + '_color_display');
+            var colorInput = document.getElementById(prefix + '_color_input');
+
+            function updateFromHex() {
+                var hex = hexInput.value;
+                var rgb = hexToRgb(hex);
+                if (rgb) {
+                    rgb = toGrayscale(rgb);
+                    var hexGray = rgbToHex(rgb.r, rgb.g, rgb.b);
+                    hexInput.value = hexGray;
+                    rgbInput.value = rgb.r + ', ' + rgb.g + ', ' + rgb.b;
+                    var hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+                    hsl.s = "0%";
+                    hslInput.value = hsl.h + ', ' + hsl.s + ', ' + hsl.l;
+                    colorDisplay.style.backgroundColor = hexGray;
+                }
+            }
+
+            function updateFromRgb() {
+                var rgbValues = rgbInput.value.split(',').map(function(v){ return v.trim(); });
+                if (rgbValues.length === 3) {
+                    var r = parseInt(rgbValues[0]), g = parseInt(rgbValues[1]), b = parseInt(rgbValues[2]);
+                    if(!isNaN(r) && !isNaN(g) && !isNaN(b)){
+                        var gray = Math.round((r + g + b) / 3);
+                        var hex = rgbToHex(gray, gray, gray);
+                        hexInput.value = hex;
+                        rgbInput.value = gray + ', ' + gray + ', ' + gray;
+                        var hsl = rgbToHsl(gray, gray, gray);
+                        hsl.s = "0%";
+                        hslInput.value = hsl.h + ', ' + hsl.s + ', ' + hsl.l;
+                        colorDisplay.style.backgroundColor = hex;
+                    }
+                }
+            }
+
+            function updateFromHsl() {
+                var hslValues = hslInput.value.split(',').map(function(v){ return v.trim().replace('%', ''); });
+                if (hslValues.length === 3) {
+                    var h = parseFloat(hslValues[0]), s = "0%", l = hslValues[2];
+                    if(!isNaN(h) && !isNaN(parseFloat(l))){
+                        var rgb = hslToRgb(h, s, l);
+                        var hex = rgbToHex(rgb.r, rgb.g, rgb.b);
+                        hexInput.value = hex;
+                        rgbInput.value = rgb.r + ', ' + rgb.g + ', ' + rgb.b;
+                        hslInput.value = hslValues[0] + ', ' + s + ', ' + hslValues[2];
+                        colorDisplay.style.backgroundColor = hex;
+                    }
+                }
+            }
+
+            hexInput.addEventListener('input', updateFromHex);
+            rgbInput.addEventListener('input', updateFromRgb);
+            hslInput.addEventListener('input', updateFromHsl);
+
+            colorDisplay.addEventListener('click', function() {
+                colorInput.click();
+            });
+
+            colorInput.addEventListener('input', function() {
+                var hex = colorInput.value;
+                hexInput.value = hex;
+                updateFromHex();
+            });
+        }
+
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function startCanvasAnimation() {
+            var canvas = document.getElementById('loadingCanvas');
+            var ctx = canvas.getContext('2d');
+            var particles = [];
+            var particleCount = 5;
+            var radius = 5;
+            var angle = 0;
+            for (var i = 0; i < particleCount; i++) {
+                particles.push({
+                    angle: (i / particleCount) * Math.PI * 2,
+                    radius: radius,
+                });
+            }
+            function draw() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                particles.forEach(function(particle) {
+                    var x = canvas.width / 2 + Math.cos(particle.angle + angle) * 20;
+                    var y = canvas.height / 2 + Math.sin(particle.angle + angle) * 20;
+                    ctx.beginPath();
+                    ctx.arc(x, y, particle.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = '#007BFF';
+                    ctx.fill();
+                });
+                angle += 0.05;
+                requestAnimationFrame(draw);
+            }
+            draw();
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            setupColorPicker('bg');
+            setupColorPicker('text');
+            var form = document.querySelector('form');
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                showLoading();
+                startCanvasAnimation();
+                var formData = new FormData(form);
+                formData.set('bg_color', document.getElementById('bg_color_hex').value);
+                formData.set('text_color', document.getElementById('text_color_hex').value);
+                fetch('/', {
+                    method: 'POST',
+                    body: formData
+                }).then(function(response) {
+                    if (response.ok) {
+                        var disposition = response.headers.get('Content-Disposition');
+                        var filename = 'processed.pdf';
+                        if (disposition && disposition.indexOf('filename=') !== -1) {
+                            var matches = /filename="?([^"]+)"?/.exec(disposition);
+                            if (matches != null && matches[1]) filename = matches[1];
+                        }
+                        return response.blob().then(function(blob) {
+                            return {blob: blob, filename: filename};
+                        });
+                    } else {
+                        return response.json().then(function(data) {
+                            throw new Error(data.error || '未知错误');
+                        });
+                    }
+                }).then(function(obj) {
+                    var a = document.createElement('a');
+                    var url = window.URL.createObjectURL(obj.blob);
+                    a.href = url;
+                    a.download = obj.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                    hideLoading();
+                }).catch(function(error) {
+                    alert('处理PDF时出错：' + error.message);
+                    hideLoading();
+                });
+            });
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>PDF颜色调整器</h1>
+        <form>
+            <div class="color-picker">
+                <label>背景颜色：</label>
+                <div class="color-picker-content">
+                    <div class="color-display" id="bg_color_display" style="background-color: #333333;"></div>
+                    <input type="color" id="bg_color_input" style="display: none;">
+                    <div class="color-inputs">
+                        <div>
+                            <label for="bg_color_hex">HEX:</label>
+                            <input type="text" id="bg_color_hex" value="#333333">
+                        </div>
+                        <div>
+                            <label for="bg_color_rgb">RGB:</label>
+                            <input type="text" id="bg_color_rgb" value="51, 51, 51">
+                        </div>
+                        <div>
+                            <label for="bg_color_hsl">HSL:</label>
+                            <input type="text" id="bg_color_hsl" value="0, 0%, 20%">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="color-picker">
+                <label>文字颜色：</label>
+                <div class="color-picker-content">
+                    <div class="color-display" id="text_color_display" style="background-color: #CCCCCC;"></div>
+                    <input type="color" id="text_color_input" style="display: none;">
+                    <div class="color-inputs">
+                        <div>
+                            <label for="text_color_hex">HEX:</label>
+                            <input type="text" id="text_color_hex" value="#CCCCCC">
+                        </div>
+                        <div>
+                            <label for="text_color_rgb">RGB:</label>
+                            <input type="text" id="text_color_rgb" value="204, 204, 204">
+                        </div>
+                        <div>
+                            <label for="text_color_hsl">HSL:</label>
+                            <input type="text" id="text_color_hsl" value="0, 0%, 80%">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <label for="pdf_file">上传PDF文件：</label>
+            <input type="file" id="pdf_file" name="pdf_file" accept="application/pdf" required>
+            <button type="submit">调整PDF颜色</button>
+        </form>
+        <div id="loading" class="loading">
+            <p>正在处理您的PDF，请稍候...</p>
+            <canvas id="loadingCanvas" width="100" height="100"></canvas>
+        </div>
+    </div>
+</body>
+</html>
